@@ -19,15 +19,16 @@ class Database:
 
     def __init__(self, conn_str):
         self.conn_str = conn_str
-        self.engine = sa.create_engine(
-                    conn_str,
-                    poolclass=sa.QueuePool,
-                    pool_size=10,
-                    max_overflow=20,
-                    pool_timeout=30,
-                    pool_recycle=3600,
-                    pool_pre_ping=True
-                )
+        self.engine = sa.create_engine(conn_str)
+        # self.engine = sa.create_engine(
+        #             conn_str,
+        #             poolclass=sa.QueuePool,
+        #             pool_size=10,
+        #             max_overflow=20,
+        #             pool_timeout=30,
+        #             pool_recycle=3600,
+        #             pool_pre_ping=True
+        #         )
         self.meta = sa.MetaData()
         self.meta.reflect(bind=self.engine)
         self.meta.bind = self.engine
