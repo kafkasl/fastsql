@@ -8,7 +8,7 @@ from dataclasses import dataclass,is_dataclass,asdict,MISSING,fields
 import sqlalchemy as sa
 from sqlalchemy.orm import Session, sessionmaker
 from fastcore.utils import *
-from fastcore.test import test_fail
+from fastcore.test import test_fail,test_eq
 from itertools import starmap
 from functools import wraps
 from contextlib import contextmanager
@@ -19,8 +19,9 @@ class Database:
 
     def __init__(self, conn_str):
         self.conn_str = conn_str
-        self.engine = create_engine(
+        self.engine = sa.create_engine(
                     conn_str,
+                    poolclass=sa.QueuePool,
                     pool_size=10,
                     max_overflow=20,
                     pool_timeout=30,
@@ -64,9 +65,6 @@ class DBTable:
     
     @property
     def pks(self)-> tuple: return tuple(self.table.primary_key) + tuple(self.table.c[o] for o in self.xtra_id.keys())
-    
-    @property
-    def conn(self): return self.db.engine.connect()
 
     def xtra(self, **kwargs):
         "Set `xtra_id`"
@@ -102,15 +100,6 @@ def schema(self:Database):
     return res
 
 # %% ../00_core.ipynb 14
-@patch
-def exists(self:DBTable):
-    "Check if this table exists in the DB"
-    return sa.inspect(self.db.engine).has_table(self.table.name)
-
-# %% ../00_core.ipynb 17
-def _wanted(obj): return {k:v for k,v in asdict(obj).items() if v not in (None,MISSING)}
-
-# %% ../00_core.ipynb 18
 # session decorator
 def with_session(method):
     @wraps(method)
@@ -119,15 +108,24 @@ def with_session(method):
             return method(self, session, *args, **kwargs)
     return wrapper
 
+# %% ../00_core.ipynb 15
+@patch
+@with_session
+def exists(self:DBTable, session):
+    return sa.inspect(session.bind).has_table(self.table.name)
+
+# %% ../00_core.ipynb 18
+def _wanted(obj): return {k:v for k,v in asdict(obj).items() if v not in (None,MISSING)}
+
 # %% ../00_core.ipynb 19
 @patch
 @with_session
 def insert(self:DBTable, session, obj):
     "Insert an object into this table, and return it"
     d = {**_wanted(obj), **self.xtra_id}
-    result = self.conn.execute(sa.insert(self.table).values(**d).returning(*self.table.columns))
+    result = session.execute(sa.insert(self.table).values(**d).returning(*self.table.columns))
     row = result.one()  # Consume the result set
-    self.conn.commit()
+    session.commit()
     return self.cls(**row._asdict())
 
 # %% ../00_core.ipynb 22
@@ -246,17 +244,15 @@ def sql(self:Connection, statement, nm='Row', *args, **kwargs):
 
 @patch
 def sql(self:MetaData, statement, *args, **kwargs):
-    "Execute `statement` string and return `DataFrame` of results (if any)"
-    return self.conn.sql(statement, *args, **kwargs)
+    "Execute `statement` string and return results (if any)"
+    if isinstance(statement, str): statement = text(statement)
+    with self.bind.connect() as conn:
+        result = conn.execute(statement, *args, **kwargs)
+        return result.tuples()
 
 # %% ../00_core.ipynb 48
 @patch
 def get(self:Table, where=None, limit=None):
     "Select from table, optionally limited by `where` and `limit` clauses"
-    return self.metadata.conn.sql(self.select().where(where).limit(limit))
-
-# %% ../00_core.ipynb 52
-@patch
-def close(self:MetaData):
-    "Close the connection"
-    self.conn.close()
+    with self.metadata.bind.connect() as conn:
+        return conn.sql(self.select().where(where).limit(limit))
